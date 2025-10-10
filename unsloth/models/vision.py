@@ -1076,7 +1076,7 @@ class FastBaseModel:
             if hasattr(embeddings, "training"): embeddings.training = True
         pass
         # Can re-enable not returning logits
-        os.environ["UNSLOTH_RETURN_LOGITS"] = "0"
+        # os.environ["UNSLOTH_RETURN_LOGITS"] = "0"
         # Turn off skip guards and set stance to default
         if torch_compiler_set_stance is not None:
             torch_compiler_set_stance(stance = "default", skip_guard_eval_unsafe = False)
