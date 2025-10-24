@@ -1201,57 +1201,64 @@ def CausalLM_fast_forward(fast_forward_inference):
         elif num_logits_to_keep != 0:
             logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :].to(dtype))
         else:
-            RETURN_LOGITS = os.environ.get("UNSLOTH_RETURN_LOGITS", "0") == "1"
-            # < 1024 Normal Unsloth uses less VRAM!
-            if DEVICE_TYPE == "hip":
-                # [TODO] AMD GPUs fail on chunked_cross_entropy loss!
-                # RuntimeError: Triton Error [HIP]: Code: 1, Messsage: invalid argument
-                RETURN_LOGITS = False
-            elif bsz*q_len <= 1024:
-                # Uses 800MB more VRAM it seems than fused CE Loss
-                RETURN_LOGITS = False
+            # Check if user wants to force logits to be returned (for custom eval)
+            FORCE_RETURN_LOGITS = os.environ.get("UNSLOTH_RETURN_LOGITS", "0") == "1"
+            
+            # Only optimize with fused CE loss if user hasn't forced logits
+            RETURN_LOGITS = FORCE_RETURN_LOGITS
+            if not FORCE_RETURN_LOGITS:
+                # < 1024 Normal Unsloth uses less VRAM!
+                if DEVICE_TYPE == "hip":
+                    # [TODO] AMD GPUs fail on chunked_cross_entropy loss!
+                    # RuntimeError: Triton Error [HIP]: Code: 1, Messsage: invalid argument
+                    RETURN_LOGITS = False
+                elif bsz*q_len <= 16384:
+                    # Uses 800MB more VRAM it seems than fused CE Loss
+                    RETURN_LOGITS = False
 
-            if not RETURN_LOGITS and labels is not None:
-                n_items = kwargs.get("num_items_in_batch", None)
-                if n_items is None: n_items = kwargs.get("n_items", None)
-
-                if self.config.model_type == "falcon_h1":
-                    hidden_states = hidden_states * self.config.lm_head_multiplier
-
-                ### DISABLED since T4 breaks
-                # OutOfResources: out of resource: shared memory, Required: 98304, Hardware limit: 65536. Reducing block sizes or `num_stages` may help.
-                # loss = fused_linear_cross_entropy(
-                #     hidden_states      = hidden_states,
-                #     lm_weight          = lm_head,
-                #     labels             = labels,
-                #     num_items_in_batch = n_items,
-                #     logit_softcapping  = logit_softcapping,
-                # )
-                loss = unsloth_fused_ce_loss(
-                    trainer              = None,
-                    hidden_states        = hidden_states,
-                    lm_head_weight       = lm_head,
-                    lm_head_bias         = None,
-                    labels               = labels,
-                    mask                 = None,
-                    n_items              = n_items,
-                    scaling              = getattr(self, "accelerator_scaler", None),
-                    target_gb            = None,
-                    torch_compile        = True,
-                    logit_softcapping    = logit_softcapping,
-                )
-                if not return_dict:
-                    output = (logits,) + outputs[1:]
-                    return (loss,) + output if loss is not None else output
-
-                output = CausalLMOutputWithPast(
-                    loss = loss,
-                    logits = EMPTY_LOGITS,
-                    past_key_values=  outputs.past_key_values,
-                    hidden_states = outputs.hidden_states,
-                    attentions = outputs.attentions,
-                )
-                return output
+            # DISABLED: Fused CE Loss optimization to always return real logits
+            # This ensures custom evaluation always gets actual logits, not EMPTY_LOGITS
+            # if not RETURN_LOGITS and labels is not None:
+            #     n_items = kwargs.get("num_items_in_batch", None)
+            #     if n_items is None: n_items = kwargs.get("n_items", None)
+            #
+            #     if self.config.model_type == "falcon_h1":
+            #         hidden_states = hidden_states * self.config.lm_head_multiplier
+            #
+            #     ### DISABLED since T4 breaks
+            #     # OutOfResources: out of resource: shared memory, Required: 98304, Hardware limit: 65536. Reducing block sizes or `num_stages` may help.
+            #     # loss = fused_linear_cross_entropy(
+            #     #     hidden_states      = hidden_states,
+            #     #     lm_weight          = lm_head,
+            #     #     labels             = labels,
+            #     #     num_items_in_batch = n_items,
+            #     #     logit_softcapping  = logit_softcapping,
+            #     # )
+            #     loss = unsloth_fused_ce_loss(
+            #         trainer              = None,
+            #         hidden_states        = hidden_states,
+            #         lm_head_weight       = lm_head,
+            #         lm_head_bias         = None,
+            #         labels               = labels,
+            #         mask                 = None,
+            #         n_items              = n_items,
+            #         scaling              = getattr(self, "accelerator_scaler", None),
+            #         target_gb            = None,
+            #         torch_compile        = True,
+            #         logit_softcapping    = logit_softcapping,
+            #     )
+            #     if not return_dict:
+            #         output = (logits,) + outputs[1:]
+            #         return (loss,) + output if loss is not None else output
+            #
+            #     output = CausalLMOutputWithPast(
+            #         loss = loss,
+            #         logits = EMPTY_LOGITS,
+            #         past_key_values=  outputs.past_key_values,
+            #         hidden_states = outputs.hidden_states,
+            #         attentions = outputs.attentions,
+            #     )
+            #     return output
             pass
             logits = self.lm_head(hidden_states.to(dtype))
         pass
